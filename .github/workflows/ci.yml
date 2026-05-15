@@ -28,10 +28,17 @@ jobs:
             libjson-c-dev \
             libssl-dev \
             libtool \
-            pkg-config
+            pkg-config \
+            unzip
 
       - name: Install Vault CLI/server
-        uses: hashicorp/setup-vault@v3
+        env:
+          VAULT_VERSION: 1.20.0
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/vault.zip" "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip"
+          unzip -q "$RUNNER_TEMP/vault.zip" -d "$RUNNER_TEMP/vault"
+          sudo install -m 0755 "$RUNNER_TEMP/vault/vault" /usr/local/bin/vault
+          vault version
 
       - name: Start Vault dev server for integration tests
         env:
