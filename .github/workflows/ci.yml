@@ -2,9 +2,6 @@ name: CI
 
 on:
   push:
-    branches:
-      - master
-      - main
   pull_request:
 
 jobs:
@@ -83,6 +80,7 @@ jobs:
       - name: Configure OpenSSL from /etc and verify installed provider loads
         run: |
           sudo mkdir -p /etc/ssl/openssl.conf.d
+          echo .include /etc/ssl/openssl.conf.d | sudo tee -a /etc/ssl/openssl.cnf
           sudo tee /etc/ssl/openssl.conf.d/vault.cnf >/dev/null <<'EOF'
           [provider_sect]
           vault = vault_sect
