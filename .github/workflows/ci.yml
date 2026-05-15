@@ -82,14 +82,13 @@ jobs:
 
       - name: Configure OpenSSL from /etc and verify installed provider loads
         run: |
-          sudo cp /etc/ssl/openssl.cnf /etc/ssl/openssl.cnf.ci-backup
-          sudo sed -i '/^\[provider_sect\]/a vault = vault_sect' /etc/ssl/openssl.cnf
-          sudo sed -i '/^\[default_sect\]/a activate = 1' /etc/ssl/openssl.cnf
-          sudo tee -a /etc/ssl/openssl.cnf >/dev/null <<'EOF'
+          sudo mkdir -p /etc/ssl/openssl.conf.d
+          sudo tee /etc/ssl/openssl.conf.d/vault.cnf >/dev/null <<'EOF'
+          [provider_sect]
+          vault = vault_sect
 
-          # Added by openssl-provider-vault CI to verify the system /etc path.
           [vault_sect]
           activate = 1
           EOF
-          OPENSSL_CONF=/etc/ssl/openssl.cnf openssl list -providers -verbose
-          OPENSSL_CONF=/etc/ssl/openssl.cnf openssl list -providers | grep -q '^  vault$'
+          openssl list -providers -verbose
+          openssl list -providers | grep -q '^  vault$'
