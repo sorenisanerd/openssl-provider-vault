@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+jobs:
+  test-install-and-openssl-config:
+    name: Tests, install, and OpenSSL config
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            build-essential \
+            libcmocka-dev \
+            libcurl4-openssl-dev \
+            libjson-c-dev \
+            libssl-dev \
+            libtool \
+            pkg-config
+
+      - name: Install Vault CLI/server
+        uses: hashicorp/setup-vault@v3
+
+      - name: Start Vault dev server for integration tests
+        env:
+          VAULT_ADDR: http://127.0.0.1:8200
+          VAULT_TOKEN: root
+        run: |
+          vault server \
+            -dev \
+            -dev-root-token-id="$VAULT_TOKEN" \
+            -dev-listen-address=127.0.0.1:8200 \
+            >"$RUNNER_TEMP/vault.log" 2>&1 &
+          echo "$!" >"$RUNNER_TEMP/vault.pid"
+          for _ in {1..30}; do
+            if vault status >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          vault status
+          vault secrets enable transit
+
+      - name: Generate build system
+        run: autoreconf -fi
+
+      - name: Configure with tests enabled
+        run: |
+          OPENSSL_MODULESDIR="$(openssl version -m | cut -d '"' -f 2)"
+          ./configure --enable-tests --libdir="$(dirname "$OPENSSL_MODULESDIR")"
+
+      - name: Build
+        run: make V=1
+
+      - name: Run test suite
+        env:
+          VAULT_ADDR: http://127.0.0.1:8200
+          VAULT_TOKEN: root
+        run: make check V=1
+
+      - name: Install provider with privileged install target
+        run: sudo make install V=1
+
+      - name: Configure OpenSSL from /etc and verify installed provider loads
+        run: |
+          sudo cp /etc/ssl/openssl.cnf /etc/ssl/openssl.cnf.ci-backup
+          sudo tee -a /etc/ssl/openssl.cnf >/dev/null <<'EOF'
+
+          # Added by openssl-provider-vault CI to verify the system /etc path.
+          openssl_conf = openssl_vault_ci_init
+
+          [openssl_vault_ci_init]
+          providers = openssl_vault_ci_providers
+
+          [openssl_vault_ci_providers]
+          default = openssl_vault_ci_default
+          vault = openssl_vault_ci_vault
+
+          [openssl_vault_ci_default]
+          activate = 1
+
+          [openssl_vault_ci_vault]
+          activate = 1
+          EOF
+          OPENSSL_CONF=/etc/ssl/openssl.cnf openssl list -providers -verbose
+          OPENSSL_CONF=/etc/ssl/openssl.cnf openssl list -providers | grep -q '^  vault$'
