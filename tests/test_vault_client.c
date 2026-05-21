@@ -1,16 +1,10 @@
 /*
  * Integration tests for vault_client.c.
  *
- * These tests require a running Vault dev server.  Set the environment:
- *
- *   VAULT_ADDR=http://127.0.0.1:8200
- *   VAULT_TOKEN=root
- *
- * Quick start:
- *   vault server -dev -dev-root-token-id=root &
- *   vault secrets enable transit
- *
- * If the variables are absent the whole suite is skipped (exit 77).
+ * If VAULT_ADDR and VAULT_TOKEN are already set the tests use that server.
+ * Otherwise, if the vault(1) binary is found on PATH, a local dev server is
+ * started automatically on 127.0.0.1:18200 and torn down when the suite
+ * finishes.  If neither condition is met the suite is skipped (exit 77).
  */
 
 #include <stdarg.h>
@@ -18,13 +12,71 @@
 #include <setjmp.h>
 #include <cmocka.h>
 
+#include <fcntl.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <curl/curl.h>
 
 #include "vault_client.h"
 #include "vault_format.h"
+
+/* ── managed Vault dev-server ────────────────────────────────────────── */
+
+static pid_t g_vault_pid = -1;
+
+static void stop_managed_vault(void)
+{
+    if (g_vault_pid > 0) {
+        kill(g_vault_pid, SIGTERM);
+        waitpid(g_vault_pid, NULL, 0);
+        g_vault_pid = -1;
+    }
+}
+
+/*
+ * Start "vault server -dev" on 127.0.0.1:18200, wait up to ~5 s for it to
+ * become ready, then enable the transit secrets engine.
+ * Returns 0 on success, -1 if the server could not be started.
+ */
+static int start_managed_vault(void)
+{
+    g_vault_pid = fork();
+    if (g_vault_pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        execlp("vault", "vault", "server",
+               "-dev",
+               "-dev-root-token-id=root",
+               "-dev-listen-address=127.0.0.1:18200",
+               (char *)NULL);
+        _exit(1);
+    }
+    if (g_vault_pid < 0) return -1;
+
+    setenv("VAULT_ADDR",  "http://127.0.0.1:18200", 1);
+    setenv("VAULT_TOKEN", "root", 1);
+
+    /* Poll until vault reports unsealed (exit 0) or we time out (~5 s). */
+    for (int i = 0; i < 20; i++) {
+        usleep(250000);
+        if (system("vault status >/dev/null 2>&1") == 0)
+            goto ready;
+    }
+    stop_managed_vault();
+    return -1;
+
+ready:;
+    int r = system("vault secrets enable transit >/dev/null 2>&1"); (void)r;
+    return 0;
+}
 
 /* ── test fixture ────────────────────────────────────────────────────── */
 
@@ -285,9 +337,15 @@ static void test_random_correct_length(void **state)
 
 int main(void)
 {
+    int managed = 0;
+
     if (!vault_addr() || !vault_token()) {
-        /* Exit 77 = autotest SKIP — no Vault dev server configured. */
-        return 77;
+        /* No external Vault configured — try to start one ourselves. */
+        if (system("vault version >/dev/null 2>&1") != 0)
+            return 77; /* vault binary not found; skip */
+        if (start_managed_vault() != 0)
+            return 77; /* failed to start dev server; skip */
+        managed = 1;
     }
 
     const struct CMUnitTest tests[] = {
@@ -305,7 +363,12 @@ int main(void)
 
         cmocka_unit_test(test_random_correct_length),
     };
-    return cmocka_run_group_tests_name("vault_client integration",
-                                       tests,
-                                       suite_setup, suite_teardown);
+    int result = cmocka_run_group_tests_name("vault_client integration",
+                                             tests,
+                                             suite_setup, suite_teardown);
+
+    if (managed)
+        stop_managed_vault();
+
+    return result;
 }

@@ -24,6 +24,16 @@ AS_IF([test "x$enable_tests" = "xyes"], [
 AM_CONDITIONAL([ENABLE_TESTS],
     [test "x$enable_tests" = "xyes" && test "x$have_cmocka" = "xyes"])
 
+AC_ARG_WITH([coverage],
+    [AS_HELP_STRING([--with-coverage],
+                    [Enable gcov coverage instrumentation (-fprofile-arcs -ftest-coverage / -lgcov)])],
+    [with_coverage=$withval], [with_coverage=no])
+
+AS_IF([test "x$with_coverage" = "xyes"], [
+    CFLAGS="$CFLAGS -fprofile-arcs -ftest-coverage"
+    LDFLAGS="$LDFLAGS -lgcov"
+])
+
 AC_CONFIG_FILES([
     Makefile
     src/Makefile
@@ -38,4 +48,5 @@ AC_MSG_RESULT([
     libcurl:   $CURL_CFLAGS
     json-c:    $JSONC_CFLAGS
     Tests:     $enable_tests (cmocka: ${have_cmocka:-no})
+    Coverage:  $with_coverage
 ])
