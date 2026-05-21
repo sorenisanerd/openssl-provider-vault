@@ -90,6 +90,7 @@ static int apply_params(vault_mac_ctx_t *ctx, const OSSL_PARAM params[])
     return 1;
 }
 
+#ifdef OSSL_FUNC_MAC_INIT_SKEY
 /*
  * vault_mac_init_skey — initialize with a provider-side key object.
  * The 'key' pointer here is a vault_keyref_t * (not raw bytes),
@@ -105,6 +106,7 @@ int vault_mac_init_skey(void *ctx, const void *key,
     mctx->data_len = 0;
     return apply_params(mctx, params);
 }
+#endif /* OSSL_FUNC_MAC_INIT_SKEY */
 
 int vault_mac_update(void *ctx, const unsigned char *in, size_t inlen)
 {

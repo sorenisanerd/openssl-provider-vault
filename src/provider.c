@@ -95,7 +95,9 @@ static const OSSL_DISPATCH vault_mac_funcs[] = {
     { OSSL_FUNC_MAC_NEWCTX,              (void(*)(void))vault_mac_newctx              },
     { OSSL_FUNC_MAC_FREECTX,             (void(*)(void))vault_mac_freectx             },
     { OSSL_FUNC_MAC_DUPCTX,              (void(*)(void))vault_mac_dupctx              },
+#ifdef OSSL_FUNC_MAC_INIT_SKEY
     { OSSL_FUNC_MAC_INIT_SKEY,           (void(*)(void))vault_mac_init_skey           },
+#endif
     { OSSL_FUNC_MAC_UPDATE,              (void(*)(void))vault_mac_update              },
     { OSSL_FUNC_MAC_FINAL,               (void(*)(void))vault_mac_final               },
     { OSSL_FUNC_MAC_GET_CTX_PARAMS,      (void(*)(void))vault_mac_get_ctx_params      },
