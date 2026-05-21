@@ -124,6 +124,15 @@ static int vault_http(vault_ctx_t *ctx, const char *path,
         return -1;
     }
 
+    if (getenv("VAULT_PROVIDER_DEBUG")) {
+        fprintf(stderr, "vault: %s %s\n",
+                body ? "POST" : "GET", url);
+        if (body)
+            fprintf(stderr, "vault: request body: %s\n", body);
+        fprintf(stderr, "vault: response %ld: %s\n",
+                http_code, resp.data ? resp.data : "");
+    }
+
     *response_out = resp.data ? resp.data : strdup("");
     return (int)http_code;
 }

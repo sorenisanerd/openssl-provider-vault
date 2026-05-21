@@ -262,6 +262,19 @@ vault-backed.crt: OK
   local secret-management mechanism.
 - Vault dev mode is only for local testing. Do not use dev mode in production.
 
+### Debugging
+
+Set `VAULT_PROVIDER_DEBUG=1` to print each HTTP request and response to stderr:
+
+```sh
+export VAULT_PROVIDER_DEBUG=1
+openssl pkeyutl -sign -inkey 'vault:demo-rsa' ...
+```
+
+This logs the HTTP method and URL, the request body if present, and the response
+status code and body — useful when diagnosing connectivity or permission issues
+with Vault.
+
 ## Test
 
 Run the unit tests:
