@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "vault_keyref.h"
+#include "wrap_malloc.h"
 
 static const unsigned char FAKE_DER[] = {
     0x30, 0x82, 0x01, 0x22,   /* minimal DER header stand-in */
@@ -165,6 +166,67 @@ static void test_serialize_null(void **state)
     assert_int_equal(-1, vault_keyref_serialize(NULL, &bytes, &len));
 }
 
+/* ── OOM tests ───────────────────────────────────────────────────────── */
+
+static void test_oom_keyref_new(void **state)
+{
+    (void)state;
+    wrap_malloc_fail_after(0);   /* calloc for the vault_keyref_t struct */
+    vault_keyref_t *ref = vault_keyref_new("k", 0, "rsa-2048", NULL, 0);
+    assert_null(ref);
+}
+
+static void test_oom_keyref_serialize(void **state)
+{
+    (void)state;
+    vault_keyref_t *ref = vault_keyref_new("k", 0, "rsa-2048", NULL, 0);
+    assert_non_null(ref);
+
+    unsigned char *bytes = NULL;
+    size_t len = 0;
+    wrap_malloc_fail_after(0);   /* malloc(total) for the serialized buffer */
+    int rc = vault_keyref_serialize(ref, &bytes, &len);
+    assert_int_equal(-1, rc);
+    assert_null(bytes);
+
+    vault_keyref_free(ref);
+}
+
+static void test_oom_keyref_deserialize_key_name(void **state)
+{
+    (void)state;
+    vault_keyref_t *orig = vault_keyref_new("my-key", 0, "rsa-2048", NULL, 0);
+    assert_non_null(orig);
+    unsigned char *bytes = NULL;
+    size_t bytes_len = 0;
+    assert_int_equal(0, vault_keyref_serialize(orig, &bytes, &bytes_len));
+    vault_keyref_free(orig);
+
+    wrap_malloc_fail_after(0);   /* first malloc: key_name buffer */
+    vault_keyref_t *ref = vault_keyref_deserialize(bytes, bytes_len);
+    assert_null(ref);
+
+    free(bytes);
+}
+
+static void test_oom_keyref_deserialize_key_type(void **state)
+{
+    (void)state;
+    vault_keyref_t *orig = vault_keyref_new("my-key", 0, "rsa-2048", NULL, 0);
+    assert_non_null(orig);
+    unsigned char *bytes = NULL;
+    size_t bytes_len = 0;
+    assert_int_equal(0, vault_keyref_serialize(orig, &bytes, &bytes_len));
+    vault_keyref_free(orig);
+
+    /* 1st malloc (key_name) succeeds, 2nd malloc (key_type) fails. */
+    wrap_malloc_fail_after(1);
+    vault_keyref_t *ref = vault_keyref_deserialize(bytes, bytes_len);
+    assert_null(ref);
+
+    free(bytes);
+}
+
 /* ── main ────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -185,6 +247,11 @@ int main(void)
         cmocka_unit_test(test_deserialize_truncated),
 
         cmocka_unit_test(test_serialize_null),
+
+        cmocka_unit_test(test_oom_keyref_new),
+        cmocka_unit_test(test_oom_keyref_serialize),
+        cmocka_unit_test(test_oom_keyref_deserialize_key_name),
+        cmocka_unit_test(test_oom_keyref_deserialize_key_type),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

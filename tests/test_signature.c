@@ -15,6 +15,7 @@
 #include "provider.h"
 #include "vault_keyref.h"
 #include "signature.h"
+#include "wrap_malloc.h"
 
 /* ── test fixtures ───────────────────────────────────────────────────── */
 
@@ -467,6 +468,65 @@ static void test_dupctx(void **state)
     free_provctx(provctx);
 }
 
+/* ── dupctx: copies a live mdctx (populated by digest_sign_init+update) ─ */
+
+static void test_dupctx_with_mdctx(void **state)
+{
+    (void)state;
+    vault_provctx_t *provctx = make_provctx();
+    vault_keyref_t  *key     = make_rsa_key();
+    void *sigctx = vault_sig_newctx(provctx, NULL);
+
+    /* digest_sign_init allocates and initialises mdctx. */
+    OSSL_PARAM params[] = { OSSL_PARAM_construct_end() };
+    assert_int_equal(1,
+        vault_sig_digest_sign_init(sigctx, "SHA256", key, params));
+
+    assert_int_equal(1,
+        vault_sig_digest_sign_update(sigctx,
+                                     (const unsigned char *)"hello", 5));
+
+    /*
+     * Dup the context while mdctx is non-null and has accumulated state.
+     * vault_sig_dupctx must call EVP_MD_CTX_copy_ex — the branch under test.
+     */
+    void *dup = vault_sig_dupctx(sigctx);
+    assert_non_null(dup);
+    assert_ptr_not_equal(sigctx, dup);
+
+    /*
+     * Both contexts hold a copy of the same in-progress SHA-256 state over
+     * "hello".  Finalising each independently should pass the same 32-byte
+     * digest to vault_sign (pkcs1v15 — RSA default when no pad mode param).
+     */
+    for (int i = 0; i < 2; i++) {
+        expect_string(vault_sign, key_name,    "my-rsa-key");
+        expect_value (vault_sign, key_version, 0);
+        expect_string(vault_sign, hash_alg,    "sha2-256");
+        expect_string(vault_sign, sig_alg,     "pkcs1v15");
+        expect_value (vault_sign, input_len,   32);
+        will_return  (vault_sign, FAKE_RSA_SIG);
+        will_return  (vault_sign, (size_t)256);
+        will_return  (vault_sign, 0);
+    }
+
+    unsigned char sig1[512], sig2[512];
+    size_t len1 = 0, len2 = 0;
+    assert_int_equal(1,
+        vault_sig_digest_sign_final(sigctx, sig1, &len1, sizeof(sig1)));
+    assert_int_equal(1,
+        vault_sig_digest_sign_final(dup,    sig2, &len2, sizeof(sig2)));
+
+    assert_int_equal(256, len1);
+    assert_int_equal(256, len2);
+    assert_memory_equal(sig1, sig2, 256);   /* same digest → same fake sig */
+
+    vault_sig_freectx(sigctx);
+    vault_sig_freectx(dup);
+    vault_keyref_free(key);
+    free_provctx(provctx);
+}
+
 /* ── sign: Ed25519 ───────────────────────────────────────────────────── */
 
 static vault_keyref_t *make_ed25519_key(void)
@@ -511,6 +571,40 @@ static void test_sign_ed25519(void **state)
     free_provctx(provctx);
 }
 
+/* ── OOM tests ───────────────────────────────────────────────────────── */
+
+static void test_oom_sig_newctx(void **state)
+{
+    (void)state;
+    vault_provctx_t *provctx = make_provctx();
+
+    wrap_malloc_fail_after(0);   /* calloc for vault_sigctx_t */
+    void *sigctx = vault_sig_newctx(provctx, NULL);
+    assert_null(sigctx);
+
+    free_provctx(provctx);
+}
+
+static void test_oom_sig_dupctx(void **state)
+{
+    (void)state;
+    vault_provctx_t *provctx = make_provctx();
+    vault_keyref_t  *key     = make_rsa_key();
+    void *sigctx = vault_sig_newctx(provctx, NULL);
+    assert_non_null(sigctx);
+
+    OSSL_PARAM params[] = { OSSL_PARAM_construct_end() };
+    vault_sig_sign_init(sigctx, key, params);
+
+    wrap_malloc_fail_after(0);   /* malloc for the duplicate vault_sigctx_t */
+    void *dup = vault_sig_dupctx(sigctx);
+    assert_null(dup);
+
+    vault_sig_freectx(sigctx);
+    vault_keyref_free(key);
+    free_provctx(provctx);
+}
+
 /* ── main ────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -529,8 +623,12 @@ int main(void)
 
         cmocka_unit_test(test_get_ctx_params),
         cmocka_unit_test(test_dupctx),
+        cmocka_unit_test(test_dupctx_with_mdctx),
 
         cmocka_unit_test(test_sign_ed25519),
+
+        cmocka_unit_test(test_oom_sig_newctx),
+        cmocka_unit_test(test_oom_sig_dupctx),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

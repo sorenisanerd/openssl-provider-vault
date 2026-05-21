@@ -110,3 +110,25 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# gcov / lcov coverage artifacts
+*.gcno
+*.gcda
+*.gcov.html
+coverage.info
+coverage_html/
+!tests/wrap_malloc.*
+*.log
+*.trs
+
+# genhtml output
+index*.html
+*.png
+*.css
+src/index*.html
+src/*.html
+tests/index*.html
+tests/*.html
+
+# Build artifacts
+configure~

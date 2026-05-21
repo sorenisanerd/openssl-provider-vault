@@ -23,6 +23,7 @@
 
 #include "vault_client.h"
 #include "vault_format.h"
+#include "wrap_malloc.h"
 
 /* ── managed Vault dev-server ────────────────────────────────────────── */
 
@@ -333,18 +334,35 @@ static void test_random_correct_length(void **state)
     free(rand_bytes);
 }
 
+/* ── OOM tests (no Vault server required) ────────────────────────────── */
+
+static void test_oom_ctx_new(void **state)
+{
+    (void)state;
+    wrap_malloc_fail_after(0);   /* calloc for vault_ctx_t */
+    vault_ctx_t *ctx = vault_ctx_new("http://vault:8200", "tok", NULL);
+    assert_null(ctx);
+}
+
 /* ── main ─────────────────────────────────────────────────────────────── */
 
 int main(void)
 {
+    /* OOM tests run unconditionally — no live Vault needed. */
+    const struct CMUnitTest oom_tests[] = {
+        cmocka_unit_test(test_oom_ctx_new),
+    };
+    int oom_result = cmocka_run_group_tests_name("vault_client oom",
+                                                  oom_tests, NULL, NULL);
+
     int managed = 0;
 
     if (!vault_addr() || !vault_token()) {
         /* No external Vault configured — try to start one ourselves. */
         if (system("vault version >/dev/null 2>&1") != 0)
-            return 77; /* vault binary not found; skip */
+            return oom_result ? oom_result : 77;
         if (start_managed_vault() != 0)
-            return 77; /* failed to start dev server; skip */
+            return oom_result ? oom_result : 77;
         managed = 1;
     }
 
@@ -370,5 +388,5 @@ int main(void)
     if (managed)
         stop_managed_vault();
 
-    return result;
+    return oom_result || result;
 }

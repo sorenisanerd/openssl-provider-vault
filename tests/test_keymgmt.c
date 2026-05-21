@@ -16,6 +16,7 @@
 #include "provider.h"
 #include "vault_keyref.h"
 #include "keymgmt.h"
+#include "wrap_malloc.h"
 
 /* ── test fixtures ───────────────────────────────────────────────────── */
 
@@ -573,6 +574,32 @@ static void test_gen_set_params_group_name_p384(void **state)
     free_provctx(provctx);
 }
 
+/* ── OOM tests ───────────────────────────────────────────────────────── */
+
+static void test_oom_keymgmt_new(void **state)
+{
+    (void)state;
+    vault_provctx_t *provctx = make_provctx();
+
+    wrap_malloc_fail_after(0);   /* calloc for the vault_keyref_t slot */
+    void *key = vault_keymgmt_new(provctx);
+    assert_null(key);
+
+    free_provctx(provctx);
+}
+
+static void test_oom_gen_init(void **state)
+{
+    (void)state;
+    vault_provctx_t *provctx = make_provctx();
+
+    wrap_malloc_fail_after(0);   /* calloc for vault_keymgmt_genctx */
+    void *genctx = vault_keymgmt_gen_init(provctx, 0, NULL);
+    assert_null(genctx);
+
+    free_provctx(provctx);
+}
+
 /* ── main ────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -610,6 +637,9 @@ int main(void)
         cmocka_unit_test(test_gen_ec_p256),
         cmocka_unit_test(test_gen_ed25519),
         cmocka_unit_test(test_gen_set_params_group_name_p384),
+
+        cmocka_unit_test(test_oom_keymgmt_new),
+        cmocka_unit_test(test_oom_gen_init),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

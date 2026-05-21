@@ -10,6 +10,7 @@
 #include <openssl/evp.h>
 
 #include "vault_format.h"
+#include "wrap_malloc.h"
 
 /* ── vault_request_encode ────────────────────────────────────────────── */
 
@@ -297,6 +298,47 @@ static void test_base64_decode_null(void **state)
     assert_int_equal(-1, vault_base64_decode(NULL, &out, &out_len));
 }
 
+/* ── OOM tests ───────────────────────────────────────────────────────── */
+/*
+ * libcrypto is a shared library, so its internal BIO allocations are NOT
+ * intercepted by --wrap,malloc.  The first wrapped malloc in each function
+ * below is the one that copies the result out of the BIO into a heap buffer.
+ */
+
+static void test_oom_request_encode(void **state)
+{
+    (void)state;
+    const unsigned char in[] = "Hello";
+
+    wrap_malloc_fail_after(0);   /* malloc(bm->length+1) in vault_request_encode */
+    char *enc = vault_request_encode(in, 5);
+    assert_null(enc);
+}
+
+static void test_oom_response_decode(void **state)
+{
+    (void)state;
+    unsigned char *out = NULL;
+    size_t out_len = 0;
+
+    wrap_malloc_fail_after(0);   /* malloc(max_out) in vault_response_decode */
+    int rc = vault_response_decode("vault:v1:SGVsbG8=", &out, &out_len);
+    assert_int_equal(-1, rc);
+    assert_null(out);
+}
+
+static void test_oom_base64_decode(void **state)
+{
+    (void)state;
+    unsigned char *out = NULL;
+    size_t out_len = 0;
+
+    wrap_malloc_fail_after(0);   /* malloc(max_out) in vault_base64_decode */
+    int rc = vault_base64_decode("SGVsbG8=", &out, &out_len);
+    assert_int_equal(-1, rc);
+    assert_null(out);
+}
+
 /* ── main ────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -336,6 +378,10 @@ int main(void)
         cmocka_unit_test(test_base64_decode_binary),
         cmocka_unit_test(test_base64_decode_encode_roundtrip),
         cmocka_unit_test(test_base64_decode_null),
+
+        cmocka_unit_test(test_oom_request_encode),
+        cmocka_unit_test(test_oom_response_decode),
+        cmocka_unit_test(test_oom_base64_decode),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
