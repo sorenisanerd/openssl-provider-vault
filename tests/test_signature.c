@@ -467,6 +467,50 @@ static void test_dupctx(void **state)
     free_provctx(provctx);
 }
 
+/* ── sign: Ed25519 ───────────────────────────────────────────────────── */
+
+static vault_keyref_t *make_ed25519_key(void)
+{
+    return vault_keyref_new("my-ed25519-key", 0, "ed25519", NULL, 0);
+}
+
+static void test_sign_ed25519(void **state)
+{
+    (void)state;
+    vault_provctx_t *provctx = make_provctx();
+    vault_keyref_t  *key     = make_ed25519_key();
+
+    void *sigctx = vault_sig_newctx(provctx, NULL);
+    assert_non_null(sigctx);
+
+    /* No special params — use the context defaults (sha2-256 / pss). */
+    OSSL_PARAM params[] = { OSSL_PARAM_construct_end() };
+    assert_int_equal(1, vault_sig_sign_init(sigctx, key, params));
+
+    static const unsigned char FAKE_ED_SIG[64] = {0xcc};
+
+    expect_string(vault_sign, key_name,    "my-ed25519-key");
+    expect_value (vault_sign, key_version, 0);
+    expect_string(vault_sign, hash_alg,    "sha2-256");   /* default */
+    expect_string(vault_sign, sig_alg,     "pss");         /* default */
+    expect_value (vault_sign, input_len,   32);            /* SHA-256 digest */
+    will_return  (vault_sign, FAKE_ED_SIG);
+    will_return  (vault_sign, (size_t)64);
+    will_return  (vault_sign, 0);
+
+    unsigned char sig[128];
+    size_t siglen = 0;
+    assert_int_equal(1,
+        vault_sig_sign(sigctx, sig, &siglen, sizeof(sig),
+                       DIGEST_SHA256, sizeof(DIGEST_SHA256)));
+    assert_int_equal(64, siglen);
+    assert_memory_equal(FAKE_ED_SIG, sig, 64);
+
+    vault_sig_freectx(sigctx);
+    vault_keyref_free(key);
+    free_provctx(provctx);
+}
+
 /* ── main ────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -485,6 +529,8 @@ int main(void)
 
         cmocka_unit_test(test_get_ctx_params),
         cmocka_unit_test(test_dupctx),
+
+        cmocka_unit_test(test_sign_ed25519),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

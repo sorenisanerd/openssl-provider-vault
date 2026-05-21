@@ -13,6 +13,7 @@ check_PROGRAMS = \
     test_store_uri    \
     test_keymgmt      \
     test_signature    \
+    test_store        \
     test_vault_client
 
 TESTS = $(check_PROGRAMS)
@@ -52,6 +53,15 @@ test_signature_SOURCES = test_signature.c mock_vault_client.c \
     $(top_srcdir)/src/vault_format.c
 test_signature_CFLAGS  = $(COMMON_CFLAGS)
 test_signature_LDADD   = $(COMMON_LDADD)
+
+# ── test_store ────────────────────────────────────────────────────────────
+test_store_SOURCES = test_store.c mock_vault_client.c \
+    $(top_srcdir)/src/store.c           \
+    $(top_srcdir)/src/vault_store_uri.c \
+    $(top_srcdir)/src/vault_keyref.c    \
+    $(top_srcdir)/src/vault_format.c
+test_store_CFLAGS  = $(COMMON_CFLAGS)
+test_store_LDADD   = $(COMMON_LDADD)
 
 # ── test_vault_client (integration — skipped unless VAULT_ADDR/TOKEN set) ──
 test_vault_client_SOURCES = test_vault_client.c \
