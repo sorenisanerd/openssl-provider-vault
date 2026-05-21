@@ -133,22 +133,42 @@ int vault_asym_encrypt(vault_ctx_t *ctx, const char *key_name, int key_version,
                        const unsigned char *plaintext, size_t plaintext_len,
                        unsigned char **ciphertext_out, size_t *ciphertext_out_len)
 {
-    (void)ctx; (void)key_name; (void)key_version;
-    (void)plaintext; (void)plaintext_len;
-    (void)ciphertext_out; (void)ciphertext_out_len;
-    function_called();
-    return mock_type(int);
+    (void)ctx;
+    check_expected(key_name);
+    check_expected(key_version);
+    check_expected(plaintext_len);
+
+    const unsigned char *ct_data = mock_ptr_type(const unsigned char *);
+    size_t               ct_len  = mock_type(size_t);
+    int                  ret     = mock_type(int);
+
+    if (ret == 0 && ct_data) {
+        *ciphertext_out     = malloc(ct_len);
+        memcpy(*ciphertext_out, ct_data, ct_len);
+        *ciphertext_out_len = ct_len;
+    }
+    return ret;
 }
 
 int vault_asym_decrypt(vault_ctx_t *ctx, const char *key_name, int key_version,
                        const unsigned char *ciphertext, size_t ciphertext_len,
                        unsigned char **plaintext_out, size_t *plaintext_out_len)
 {
-    (void)ctx; (void)key_name; (void)key_version;
-    (void)ciphertext; (void)ciphertext_len;
-    (void)plaintext_out; (void)plaintext_out_len;
-    function_called();
-    return mock_type(int);
+    (void)ctx;
+    check_expected(key_name);
+    check_expected(key_version);
+    check_expected(ciphertext_len);
+
+    const unsigned char *pt_data = mock_ptr_type(const unsigned char *);
+    size_t               pt_len  = mock_type(size_t);
+    int                  ret     = mock_type(int);
+
+    if (ret == 0 && pt_data) {
+        *plaintext_out     = malloc(pt_len);
+        memcpy(*plaintext_out, pt_data, pt_len);
+        *plaintext_out_len = pt_len;
+    }
+    return ret;
 }
 
 int vault_sym_encrypt(vault_ctx_t *ctx, const char *key_name, int key_version,
@@ -178,10 +198,22 @@ int vault_hmac(vault_ctx_t *ctx, const char *key_name, int key_version,
                const unsigned char *input, size_t input_len,
                unsigned char **hmac_out, size_t *hmac_out_len)
 {
-    (void)ctx; (void)key_name; (void)key_version; (void)algorithm;
-    (void)input; (void)input_len; (void)hmac_out; (void)hmac_out_len;
-    function_called();
-    return mock_type(int);
+    (void)ctx;
+    check_expected(key_name);
+    check_expected(key_version);
+    check_expected(algorithm);
+    check_expected(input_len);
+
+    const unsigned char *hmac_data = mock_ptr_type(const unsigned char *);
+    size_t               hlen      = mock_type(size_t);
+    int                  ret       = mock_type(int);
+
+    if (ret == 0 && hmac_data) {
+        *hmac_out     = malloc(hlen);
+        memcpy(*hmac_out, hmac_data, hlen);
+        *hmac_out_len = hlen;
+    }
+    return ret;
 }
 
 int vault_hash(vault_ctx_t *ctx, const char *algorithm,

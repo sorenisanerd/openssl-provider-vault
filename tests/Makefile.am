@@ -18,6 +18,8 @@ check_PROGRAMS = \
     test_store_uri    \
     test_keymgmt      \
     test_signature    \
+    test_asym_cipher  \
+    test_mac          \
     test_store        \
     test_vault_client
 
@@ -62,6 +64,24 @@ test_signature_SOURCES  = test_signature.c wrap_malloc.c mock_vault_client.c \
 test_signature_CFLAGS   = $(COMMON_CFLAGS)
 test_signature_LDFLAGS  = $(wrap_malloc_WRAPFLAGS)
 test_signature_LDADD    = $(COMMON_LDADD)
+
+# ── test_asym_cipher ──────────────────────────────────────────────────
+test_asym_cipher_SOURCES = test_asym_cipher.c wrap_malloc.c mock_vault_client.c \
+    $(top_srcdir)/src/asym_cipher.c  \
+    $(top_srcdir)/src/vault_keyref.c \
+    $(top_srcdir)/src/vault_format.c
+test_asym_cipher_CFLAGS  = $(COMMON_CFLAGS)
+test_asym_cipher_LDFLAGS = $(wrap_malloc_WRAPFLAGS)
+test_asym_cipher_LDADD   = $(COMMON_LDADD)
+
+# ── test_mac ──────────────────────────────────────────────────────────
+test_mac_SOURCES = test_mac.c wrap_malloc.c mock_vault_client.c \
+    $(top_srcdir)/src/mac.c          \
+    $(top_srcdir)/src/vault_keyref.c \
+    $(top_srcdir)/src/vault_format.c
+test_mac_CFLAGS  = $(COMMON_CFLAGS)
+test_mac_LDFLAGS = $(wrap_malloc_WRAPFLAGS)
+test_mac_LDADD   = $(COMMON_LDADD)
 
 # ── test_store ────────────────────────────────────────────────────────
 test_store_SOURCES = test_store.c mock_vault_client.c \

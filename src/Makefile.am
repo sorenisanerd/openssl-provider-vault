@@ -18,7 +18,9 @@ vault_la_SOURCES = \
     signature.c    \
     signature.h    \
     asym_cipher.c  \
+    asym_cipher.h  \
     mac.c          \
+    mac.h          \
     store.c
 
 vault_la_CFLAGS  = $(OPENSSL_CFLAGS) $(CURL_CFLAGS) $(JSONC_CFLAGS) -fvisibility=hidden

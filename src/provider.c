@@ -1,6 +1,8 @@
 #include "provider.h"
 #include "keymgmt.h"
 #include "signature.h"
+#include "asym_cipher.h"
+#include "mac.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +72,39 @@ static const OSSL_DISPATCH vault_sig_funcs[] = {
     { 0, NULL }
 };
 
+/* ── ASYM_CIPHER dispatch table ──────────────────────────────────────── */
+
+static const OSSL_DISPATCH vault_asym_cipher_funcs[] = {
+    { OSSL_FUNC_ASYM_CIPHER_NEWCTX,              (void(*)(void))vault_asym_cipher_newctx              },
+    { OSSL_FUNC_ASYM_CIPHER_FREECTX,             (void(*)(void))vault_asym_cipher_freectx             },
+    { OSSL_FUNC_ASYM_CIPHER_DUPCTX,              (void(*)(void))vault_asym_cipher_dupctx              },
+    { OSSL_FUNC_ASYM_CIPHER_ENCRYPT_INIT,        (void(*)(void))vault_asym_cipher_encrypt_init        },
+    { OSSL_FUNC_ASYM_CIPHER_ENCRYPT,             (void(*)(void))vault_asym_cipher_encrypt             },
+    { OSSL_FUNC_ASYM_CIPHER_DECRYPT_INIT,        (void(*)(void))vault_asym_cipher_decrypt_init        },
+    { OSSL_FUNC_ASYM_CIPHER_DECRYPT,             (void(*)(void))vault_asym_cipher_decrypt             },
+    { OSSL_FUNC_ASYM_CIPHER_GET_CTX_PARAMS,      (void(*)(void))vault_asym_cipher_get_ctx_params      },
+    { OSSL_FUNC_ASYM_CIPHER_GETTABLE_CTX_PARAMS, (void(*)(void))vault_asym_cipher_gettable_ctx_params },
+    { OSSL_FUNC_ASYM_CIPHER_SET_CTX_PARAMS,      (void(*)(void))vault_asym_cipher_set_ctx_params      },
+    { OSSL_FUNC_ASYM_CIPHER_SETTABLE_CTX_PARAMS, (void(*)(void))vault_asym_cipher_settable_ctx_params },
+    { 0, NULL }
+};
+
+/* ── MAC dispatch table ──────────────────────────────────────────────── */
+
+static const OSSL_DISPATCH vault_mac_funcs[] = {
+    { OSSL_FUNC_MAC_NEWCTX,              (void(*)(void))vault_mac_newctx              },
+    { OSSL_FUNC_MAC_FREECTX,             (void(*)(void))vault_mac_freectx             },
+    { OSSL_FUNC_MAC_DUPCTX,              (void(*)(void))vault_mac_dupctx              },
+    { OSSL_FUNC_MAC_INIT_SKEY,           (void(*)(void))vault_mac_init_skey           },
+    { OSSL_FUNC_MAC_UPDATE,              (void(*)(void))vault_mac_update              },
+    { OSSL_FUNC_MAC_FINAL,               (void(*)(void))vault_mac_final               },
+    { OSSL_FUNC_MAC_GET_CTX_PARAMS,      (void(*)(void))vault_mac_get_ctx_params      },
+    { OSSL_FUNC_MAC_GETTABLE_CTX_PARAMS, (void(*)(void))vault_mac_gettable_ctx_params },
+    { OSSL_FUNC_MAC_SET_CTX_PARAMS,      (void(*)(void))vault_mac_set_ctx_params      },
+    { OSSL_FUNC_MAC_SETTABLE_CTX_PARAMS, (void(*)(void))vault_mac_settable_ctx_params },
+    { 0, NULL }
+};
+
 /* ── algorithm tables ────────────────────────────────────────────────── */
 
 static const OSSL_ALGORITHM vault_keymgmt_algs[] = {
@@ -92,6 +127,18 @@ static const OSSL_ALGORITHM vault_sig_algs[] = {
     { NULL, NULL, NULL, NULL }
 };
 
+static const OSSL_ALGORITHM vault_asym_cipher_algs[] = {
+    { "RSA:rsaEncryption", NULL, vault_asym_cipher_funcs,
+      "Vault RSA-OAEP encrypt/decrypt" },
+    { NULL, NULL, NULL, NULL }
+};
+
+static const OSSL_ALGORITHM vault_mac_algs[] = {
+    { "HMAC", NULL, vault_mac_funcs,
+      "Vault HMAC" },
+    { NULL, NULL, NULL, NULL }
+};
+
 static const OSSL_ALGORITHM vault_store_algs[] = {
     { "vault", "provider=vault", vault_store_funcs,
       "Vault transit key URI loader" },
@@ -106,10 +153,12 @@ static const OSSL_ALGORITHM *vault_query(void *provctx, int op,
     (void)provctx;
     *no_cache = 0;
     switch (op) {
-    case OSSL_OP_KEYMGMT:    return vault_keymgmt_algs;
-    case OSSL_OP_SIGNATURE:  return vault_sig_algs;
-    case OSSL_OP_STORE:      return vault_store_algs;
-    default:                 return NULL;
+    case OSSL_OP_KEYMGMT:      return vault_keymgmt_algs;
+    case OSSL_OP_SIGNATURE:    return vault_sig_algs;
+    case OSSL_OP_ASYM_CIPHER:  return vault_asym_cipher_algs;
+    case OSSL_OP_MAC:          return vault_mac_algs;
+    case OSSL_OP_STORE:        return vault_store_algs;
+    default:                   return NULL;
     }
 }
 
