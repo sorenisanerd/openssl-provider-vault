@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software in your work, please cite it using the following metadata."
+title: "OpenSSL Vault Provider"
+version: 0.1.0
+date-released: 2026-05-29
+identifiers:
+  - type: url
+    value: "https://github.com/sorenisanerd/openssl-provider-vault"
+    description: "Source repository"
+
+authors:
+  - family-names: "Hansen"
+    given-names: "Soren L."
+    email: "sorenisanerd@gmail.com"
+    orcid: "https://orcid.org/0009-0002-4740-8647"
+
+keywords:
+  - "OpenSSL"
+  - "HashiCorp Vault"
+  - "transit engine"
+  - "provider module"
+
+repository-code: "https://github.com/sorenisanerd/openssl-provider-vault"
+abstract: "An OpenSSL 3 provider that lets OpenSSL use keys stored in HashiCorp Vault's transit secrets engine. Private keys stay in Vault; the provider calls Vault's transit API to sign, verify, and perform other private-key operations."
+
+preferred-citation:
+  type: article
+  title: "openssl-provider-vault: Transparent Cryptographic Key Isolation for OpenSSL~3 via HashiCorp Vault"
+  authors:
+    - family-names: "Hansen"
+      given-names: "Soren L."
+      email: "sorenisanerd@gmail.com"
+      orcid: "https://orcid.org/0009-0002-4740-8647"
+  year: 2026
+  month: 5
+  url: "https://github.com/sorenisanerd/openssl-provider-vault/raw/main/vault_provider.pdf"

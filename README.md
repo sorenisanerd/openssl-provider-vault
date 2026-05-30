@@ -290,3 +290,18 @@ For Vault-backed integration coverage, run a local Vault server, export
 make check
 make distcheck
 ```
+
+## Citation
+
+If you use or reference this work in an academic context, please cite it as:
+
+```bibtex
+@techreport{hansen2026openssl,
+  title        = {{openssl-provider-vault}: Transparent Cryptographic Key
+                  Isolation for {OpenSSL}~3 via {HashiCorp} {Vault}},
+  author       = {Soren L. Hansen},
+  year         = {2026},
+  institution  = {Independent},
+  url          = {https://github.com/sorenisanerd/openssl-provider-vault}
+}
+```

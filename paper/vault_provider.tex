@@ -1,0 +1,613 @@
+% Both url and microtype are loaded by acmart; pass options before it does.
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{protrusion=true,expansion=false}{microtype}
+\documentclass[sigconf,10pt]{acmart}
+
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+% Give TeX up to 3 em of extra stretch before declaring an overfull box.
+% Combined with microtype's hz-optimization this eliminates almost all
+% column-overflow without resorting to \sloppy's loose spacing.
+\emergencystretch=3em
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{gray},
+  breaklines=true,
+  frame=single,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=1.5em,
+  framexleftmargin=1.5em,
+}
+
+\setcopyright{none}
+% Suppress acmart's auto-filled conference/DOI placeholder block in the
+% header and the copyright/permission footnote at the bottom of column 1.
+\settopmatter{printacmref=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+
+% ── metadata ────────────────────────────────────────────────────────────────
+\title{openssl-provider-vault: Transparent Cryptographic Key Isolation\\
+       for OpenSSL~3 via HashiCorp Vault}
+
+\author{Soren L.~Hansen}
+\email{sorenisanerd@gmail.com}
+\affiliation{
+  \institution{Independent Researcher}
+  \city{}
+  \country{}
+}
+
+\begin{abstract}
+Private key exposure remains a primary cause of large-scale cryptographic
+failures. Hardware Security Modules mitigate this risk but impose high cost and
+operational complexity.  Software-based secret-management systems such as
+HashiCorp Vault offer strong logical and network-level isolation guarantees
+at a fraction of the deployment friction---when deployed on a separate
+host, an adversary must compromise both the application process and the
+Vault cluster simultaneously to extract key material, a strictly stronger
+requirement than a single-system boundary---yet integrating them with
+applications that rely on standard TLS and signature APIs has historically
+required intrusive code changes.
+
+We present \emph{openssl-provider-vault}, an OpenSSL~3 provider that routes
+private-key operations such as signing and asymmetric encryption, together
+with HMAC operations, through Vault's transit secrets engine without any
+modification to applications or system libraries.  The provider implements
+the standard OpenSSL~3 provider dispatch interface, making it a drop-in
+provider for the supported key-management, signing, asymmetric-cipher, MAC,
+and STORE operations.  We describe the security architecture, the design
+trade-offs imposed by the OpenSSL~3 API, and lessons learned from bridging
+the impedance mismatch between a streaming cipher API and a prehash-oriented
+remote service.
+\end{abstract}
+
+\keywords{key management, OpenSSL provider, HashiCorp Vault, key isolation,
+transit encryption, cryptographic API}
+
+%%
+%% CCS concepts
+%%
+\begin{CCSXML}
+<ccs2012>
+  <concept>
+    <concept_id>10002978.10002986.10002990</concept_id>
+    <concept_desc>Security and privacy~Key management</concept_desc>
+    <concept_significance>500</concept_significance>
+  </concept>
+  <concept>
+    <concept_id>10002978.10002986.10003017</concept_id>
+    <concept_desc>Security and privacy~Cryptography</concept_desc>
+    <concept_significance>300</concept_significance>
+  </concept>
+  <concept>
+    <concept_id>10011007.10011006.10011039</concept_id>
+    <concept_desc>Software and its engineering~Software libraries and repositories</concept_desc>
+    <concept_significance>100</concept_significance>
+  </concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Security and privacy~Key management}
+\ccsdesc[300]{Security and privacy~Cryptography}
+\ccsdesc[100]{Software and its engineering~Software libraries and repositories}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{document}
+\maketitle
+
+% ── 1. Introduction ──────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+
+The compromise of a private key is a catastrophic, often irreversible event.
+Once an adversary obtains the private key of a TLS certificate, a code-signing
+identity, or a long-lived authentication credential, they can silently
+impersonate the legitimate holder indefinitely.  Notable incidents---from
+rogue certificate issuance to software supply-chain attacks---have
+involved leaked or compromised private keys as a central element.
+
+The classical defense is an \emph{Hardware Security Module} (HSM): a
+tamper-resistant device that holds the key and exposes only high-level
+operations (sign, decrypt).  The private key never leaves the HSM boundary
+in cleartext.  The drawback is cost---enterprise HSMs range from several
+hundred to several thousand dollars per unit---and operational complexity.
+Deployments must manage physical devices, driver stacks, firmware updates,
+and the coarse-grained concurrency model imposed by PKCS\#11.
+
+Software-defined secret-management systems, and HashiCorp Vault in particular,
+replicate the same conceptual boundary in a cloud-native package: a separate
+process (or cluster) holds keys, enforces access policy, and exposes only
+cryptographic operations through an authenticated HTTP API.  Vault's
+\emph{transit secrets engine}~\cite{vault-transit} functions as a
+``cryptography as a service'' layer with built-in key versioning, automatic
+rotation, and a rich audit trail.
+
+Integrating Vault into application-layer TLS or signing workflows is,
+however, non-trivial.  Applications that use OpenSSL directly must either
+call Vault's HTTP API themselves---adding a heavyweight dependency and a
+significant refactoring burden---or depend on a thin wrapper library that
+re-implements enough of the EVP\_PKEY interface to satisfy the caller.
+Neither approach is satisfactory at scale.
+
+We resolve this tension by exploiting the \emph{provider model} introduced
+in OpenSSL~3.0~\cite{openssl3-providers}.  A provider is a dynamically
+loaded module that implements one or more cryptographic operations through a
+well-defined dispatch table.  Applications that use the standard
+\texttt{EVP\_*} API are entirely unaware of the underlying provider; the
+runtime selects the appropriate one based on algorithm properties and the
+active library context.  By packaging the Vault integration as a provider,
+we achieve full transparency: existing binaries, system TLS stacks, and
+OpenSSL-based utilities obtain the isolation properties of Vault without any
+code changes beyond a configuration file entry.
+
+The contributions of this paper are:
+\begin{itemize}
+  \item A design and open-source implementation of \texttt{openssl-provider-vault},
+        an OpenSSL~3 provider backed by the Vault transit engine
+        (\S\ref{sec:design}, \S\ref{sec:impl}).
+  \item An analysis of the security properties that the design provides, and
+        the residual risks it does not eliminate (\S\ref{sec:security}).
+  \item A discussion of the impedance mismatches between OpenSSL's streaming
+        cryptography model and Vault's prehash-oriented REST API, and how we
+        resolve them (\S\ref{sec:challenges}).
+\end{itemize}
+
+% ── 2. Background ────────────────────────────────────────────────────────────
+\section{Background}
+\label{sec:background}
+
+\subsection{The OpenSSL~3 Provider Model}
+
+OpenSSL~3 restructured its algorithm dispatch machinery around the concept of
+\emph{providers}~\cite{openssl3-providers}.  A provider is a shared library
+(or a statically compiled module) that exports a set of \emph{operation
+implementations} through a C dispatch table.  Each operation corresponds to
+an algorithm class---signature, asymmetric cipher, symmetric cipher, key
+management, MAC, digest, and so on---and is identified by a combination of
+algorithm name and property string.
+
+The runtime selects a provider at algorithm instantiation time.  If an
+application calls \texttt{EVP\_DigestSignInit} with algorithm
+\texttt{"RSA-SHA256"} and the active library context has been configured with
+\texttt{openssl-provider-vault}, the provider's \texttt{signature} dispatch table is
+consulted first.  From the application's perspective, the call is
+indistinguishable from the built-in software provider.
+
+Key objects cross provider boundaries via a \emph{key reference} mechanism.
+A provider exports keys as opaque byte sequences through
+\texttt{keymgmt\_export} / \texttt{keymgmt\_import}; a receiving provider
+reconstructs the local representation from those bytes.  This decoupling
+lets openssl-provider-vault store only a lightweight handle to the remote key while
+still participating in the standard \texttt{EVP\_PKEY} ownership model.
+
+\subsection{HashiCorp Vault Transit Engine}
+
+The Vault transit secrets engine~\cite{vault-transit} exposes cryptographic
+operations over an authenticated HTTPS API.  Keys are created with a name
+and a type (\texttt{rsa-2048}, \texttt{ecdsa-p256}, \texttt{ed25519},
+\texttt{aes256-gcm96}, etc.) and are never exportable by default.  The
+engine supports:
+
+\begin{itemize}
+  \item \textbf{Sign / Verify}: \texttt{POST /v1/transit/sign/:name} accepts a
+        base64-encoded input (raw data or a digest), an optional hash algorithm,
+        and a signature algorithm (\texttt{pss}, \texttt{pkcs1v15},
+        \texttt{ecdsa}).
+  \item \textbf{Encrypt / Decrypt}: symmetric and RSA operations;
+        ciphertext is returned as a versioned envelope string
+        (\texttt{vault:v\emph{N}:\emph{base64}}), where \emph{N} is the key
+        version used for encryption.
+  \item \textbf{HMAC}: \texttt{POST /v1/transit/hmac/:name/:alg}.
+  \item \textbf{Key metadata}: \texttt{GET /v1/transit/keys/:name} returns
+        the key type, version history, and PEM-encoded public keys.
+\end{itemize}
+
+Access is governed by Vault policies; every operation is recorded in the
+audit log, giving operators a complete and tamper-evident record of key
+usage.
+
+% ── 3. Design ────────────────────────────────────────────────────────────────
+\section{Design}
+\label{sec:design}
+
+\subsection{The Central Invariant: Keys Never Leave Vault}
+
+The defining property of openssl-provider-vault is that \emph{no private key
+material is ever present in the process memory of the application using
+OpenSSL}.  The provider holds only a \emph{key reference} struct
+(\texttt{vault\_keyref\_t}) containing:
+
+\begin{itemize}
+  \item the Vault key name and current version number,
+  \item the key type string (\texttt{"rsa-2048"}, \texttt{"ecdsa-p256"},
+        \textit{etc.}),
+  \item optionally, a cached copy of the \emph{public} key in DER-encoded
+        SubjectPublicKeyInfo format, fetched once at key creation or load time.
+\end{itemize}
+
+The public key is cached locally as a performance optimization for operations
+that only require it (certificate verification, TLS handshake public-key
+extraction) and carries no secret material.
+
+When an operation requiring key material is requested---such as signing,
+decrypting, or HMAC computation---the provider serializes the input according
+to Vault's API contract, transmits it over an HTTPS connection with standard
+TLS server authentication, and returns only the result (signature bytes,
+plaintext, MAC tag) to the caller.  The private key is exercised exclusively
+inside Vault.
+
+\begin{figure}[t]
+  \centering
+  \begin{lstlisting}[language=C,caption={Key reference structure.},
+                     label={lst:keyref}]
+typedef struct {
+    char          *key_name;
+    int            key_version;
+    char          *key_type;
+    unsigned char *pubkey_der;
+    size_t         pubkey_der_len;
+} vault_keyref_t;
+  \end{lstlisting}
+\end{figure}
+
+\subsection{Supported Operations}
+
+openssl-provider-vault implements four provider operation classes:
+
+\textbf{KEYMGMT.}  Handles key lifecycle: creation (\texttt{gen}), loading
+from a serialized reference (\texttt{load}), parameter queries
+(\texttt{get\_params}), and public-key export (\texttt{export}).  Private-key
+export is unconditionally rejected; the provider returns an error if
+\texttt{OSSL\_KEYMGMT\_SELECT\_PRIVATE\_KEY} is requested.  Key generation
+maps to \texttt{POST /v1/transit/keys/:name}; the key name is supplied via a
+custom \texttt{OSSL\_PARAM} (\texttt{"vault-key-name"}).
+
+\textbf{SIGNATURE.}  Implements sign, verify, and the digest-sign/verify
+streaming variants for RSA-PSS, RSA-PKCS\#1 v1.5, ECDSA, and Ed25519.
+
+\textbf{ASYM\_CIPHER.}  Wraps Vault's \texttt{encrypt} and \texttt{decrypt}
+endpoints for RSA-based asymmetric encryption.
+
+\textbf{MAC.}  Delegates HMAC computation to Vault's \texttt{hmac} endpoint.
+
+\textbf{STORE.}  Resolves \texttt{vault:} URIs to key references.
+Applications load a Vault-backed key through OpenSSL's STORE framework using
+a URI such as \texttt{"vault:my-signing-key"}, analogous to other
+URI-backed loaders such as \texttt{pkcs11:}.
+
+\subsection{Configuration}
+\label{sec:config}
+
+The provider is activated by adding a stanza to \texttt{openssl.cnf}:
+
+\begin{lstlisting}[caption={Minimal openssl.cnf for openssl-provider-vault.}]
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+vault = vault_sect
+
+[vault_sect]
+module = /usr/lib/ossl-modules/vault.so
+vault_addr  = https://vault.example.com:8200
+vault_token = s.xxxxx
+\end{lstlisting}
+
+No application code changes are required beyond configuring OpenSSL to load
+the provider and supply the necessary Vault connection parameters.
+
+% ── 4. Implementation ────────────────────────────────────────────────────────
+\section{Implementation}
+\label{sec:impl}
+
+openssl-provider-vault is implemented in approximately 2\,600 lines of C99 across
+ten source modules (Table~\ref{tab:modules}).  It depends on libcurl for
+HTTP transport and json-c for response parsing; all other dependencies are
+satisfied by the OpenSSL library itself.
+
+\begin{table}[t]
+  \caption{Source modules and their roles.}
+  \label{tab:modules}
+  \small
+  \begin{tabularx}{\columnwidth}{lX}
+    \toprule
+    Module & Responsibility \\
+    \midrule
+    \texttt{provider.c}          & Provider entry point, context lifecycle \\
+    \texttt{vault\_client.c}     & HTTP client (libcurl), JSON parsing \\
+    \texttt{vault\_format.c}     & Base64 encode/decode, Vault wire format \\
+    \texttt{vault\_keyref.c}     & Key reference struct, serialization \\
+    \texttt{vault\_store\_uri.c} & \texttt{vault:} URI parser \\
+    \texttt{keymgmt.c}           & KEYMGMT dispatch implementation \\
+    \texttt{signature.c}         & SIGNATURE dispatch implementation \\
+    \texttt{asym\_cipher.c}      & ASYM\_CIPHER dispatch implementation \\
+    \texttt{mac.c}               & MAC (HMAC) dispatch implementation \\
+    \texttt{store.c}             & STORE dispatch implementation \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Testing}
+
+At the time of writing, the test suite comprises roughly 3\,500 lines of
+test code and just over 150 unit and integration tests across nine
+binaries. It is designed so that every test binary is entirely self-contained:
+each links the source files it exercises directly, rather than loading the
+provider shared library.  Where a test exercises a module that normally calls
+vault\_client.c, a \emph{mock vault client} is substituted, allowing
+full control over Vault API responses via cmocka's \texttt{will\_return}
+mechanism~\cite{cmocka}.
+
+One test binary (\texttt{test\_vault\_client}) is an integration test that
+starts a local Vault dev server automatically if the \texttt{vault(1)} binary
+is present on \texttt{PATH}, or connects to an external server if
+\texttt{VAULT\_ADDR}/\texttt{VAULT\_TOKEN} are set.  If neither condition is
+met, the binary exits with code~77 (autotest ``skip'').
+
+\textbf{OOM / allocation-failure testing.}  Heap exhaustion is a
+common cause of subtle memory-safety bugs in C code.  To exercise all
+allocation failure paths, we use GNU ld's \texttt{--wrap} mechanism to
+intercept \texttt{malloc} and \texttt{calloc} at link time.  A shared helper
+(\texttt{wrap\_malloc.c}) exposes a \texttt{wrap\_malloc\_fail\_after(n)}
+function that causes the next allocation from compiled-in code to return
+\texttt{NULL} after $n$ successful calls.  Because the system libraries
+(libcrypto, libcurl, libc) are shared objects, their internal allocations
+are \emph{not} intercepted---only direct calls from provider source files
+are affected, giving precise control over which allocation is under test.
+
+% ── 5. Design Challenges ─────────────────────────────────────────────────────
+\section{Design Challenges}
+\label{sec:challenges}
+
+\subsection{The Prehashing Impedance Mismatch}
+
+OpenSSL's digest-sign API is a streaming interface: the caller feeds data
+incrementally through \texttt{Digest\-Sign\-Update} and finalizes with
+\texttt{Digest\-Sign\-Final}.  Vault's sign endpoint, by contrast, accepts
+a single pre-digested input alongside the \texttt{prehashed=true} flag.
+
+The provider resolves this by maintaining an \texttt{EVP\_MD\_CTX} inside
+the signature context struct.  During update calls, data is accumulated into
+the local digest context; at finalization time, the digest is computed
+locally and the resulting hash is submitted to Vault.  This is correct and
+secure: the hash is computed in the same process that would otherwise compute
+it before handing off to any software signer; no trust boundary is crossed.
+
+\subsection{Context Duplication (\texttt{dupctx})}
+
+The OpenSSL provider interface requires that a context can be duplicated at
+any point during a streaming operation via \texttt{dupctx}.  For the
+signature provider, this means copying the \texttt{EVP\_MD\_CTX} mid-stream.
+The implementation calls \texttt{EVP\_MD\_CTX\_copy\_ex} on the source
+context and attaches the result to the newly allocated destination context.
+Care must be taken to null-initialize the destination's \texttt{mdctx}
+pointer before branching on the source, so that a copy-failure path calls
+\texttt{EVP\_MD\_CTX\_free(NULL)} (a no-op) rather than double-freeing a
+partially initialized struct.
+
+\subsection{Vault Wire Format}
+
+Vault's transit engine encodes all binary data in URL-safe base64 (no
+padding in some contexts) and prefixes ciphertext with a versioned envelope
+(\texttt{vault:v\emph{N}:\emph{base64}}), where \emph{N} is the key
+version number.  The \texttt{vault\_format.c} module
+centralizes all encoding and decoding using OpenSSL's BIO chain API, ensuring
+a single, tested code path for all format conversions.
+
+\subsection{Algorithm Identifier Generation}
+
+Some callers (notably those constructing X.509 certificate signing requests)
+query the signature context for an ASN.1 \texttt{AlgorithmIdentifier} via
+the \texttt{OSSL\_SIGNATURE\_PARAM\_ALGORITHM\_ID} parameter.  The provider
+synthesizes the correct DER-encoded structure using \texttt{X509\_ALGOR\_new}
+and \texttt{i2d\_X509\_ALGOR}, driven by the hash NID and key type stored in
+the context.  This is necessary for compatibility with OpenSSL's CSR and
+certificate-generation code paths, which retrieve the algorithm identifier
+from the signer context rather than from the key.
+
+% ── 6. Security Analysis ─────────────────────────────────────────────────────
+\section{Security Properties and Limitations}
+\label{sec:security}
+
+\subsection{What openssl-provider-vault Protects}
+
+\textbf{Memory-resident key material.}  Because the private key is never
+retrieved from Vault, a process-level compromise---including a full heap or
+stack dump, an arbitrary-read vulnerability, or a debugger attach---cannot
+yield the private key.  This is the primary threat addressed.
+
+\textbf{Key-use audit trail.}  Every signing, encryption, and HMAC operation
+generates an entry in Vault's audit log.  Operators can detect unexpected
+key usage, enforce rate limits via Vault policies, and obtain a forensic
+timeline after an incident.
+
+\textbf{Key revocation and rotation.}  Vault supports immediate key
+revocation and seamless key rotation without re-keying existing ciphertexts
+(for symmetric keys).  The \texttt{vault\_keyref\_t} stores the key version
+used at operation time, enabling Vault's min-decryption-version policy to
+enforce forward secrecy windows.
+
+\textbf{Access control.}  Vault policies can restrict which application
+identities (AppRole, Kubernetes auth, etc.) may use which keys for which
+operations, with much finer granularity than file system permissions.
+
+\subsection{Residual Risks}
+
+\textbf{Vault availability.}  openssl-provider-vault introduces a synchronous
+dependency on the Vault cluster for every private-key operation.  A Vault
+outage or network partition will prevent signing and decryption.  Operators
+should deploy Vault with its recommended HA configuration~\cite{vault-ha}.
+
+\textbf{Transport security.}  The provider communicates with Vault over
+HTTPS.  The security of this channel depends on correct certificate
+validation and the absence of a MITM adversary.  Currently the provider
+relies on libcurl's default server-certificate validation; future work
+should expose configuration for a pinned CA bundle and, optionally,
+client-certificate-based authentication.
+
+\textbf{Token storage.}  The Vault token is currently read from environment
+variables or \texttt{openssl.cnf}.  An adversary with read access to either
+can obtain a token and use it to request signatures directly.  More
+robust authentication methods (e.g., Vault Agent, Kubernetes auth, AWS IAM
+auth) should be preferred in production, and token storage should be treated
+with the same care as the key it protects.
+
+\textbf{Side channels in Vault.}  openssl-provider-vault does not address timing
+or other side channels within the Vault process itself.  Vault uses
+Go's standard library crypto, which incorporates timing countermeasures---RSA
+blinding, constant-time comparison via \texttt{crypto/subtle}---for critical
+operations.  The extent to which Go's big-number arithmetic provides complete
+constant-time guarantees remains an area of active research~\cite{go-constant-time-bignum};
+this dimension of side-channel resistance is outside the scope of the present work.
+
+\textbf{Scope: no FIPS certification.}  openssl-provider-vault is not a FIPS
+140-validated module.  Organizations with FIPS requirements should evaluate
+whether Vault's own FIPS variant satisfies their compliance needs.
+
+% ── 7. Related Work ──────────────────────────────────────────────────────────
+\section{Related Work}
+\label{sec:related}
+
+\textbf{PKCS\#11-based providers.}
+\texttt{pkcs11-provider}~\cite{pkcs11-provider} is the primary prior art for
+OpenSSL~3 provider-based key isolation.  It implements the same drop-in
+transparency goal against PKCS\#11 tokens---physical HSMs, SoftHSM, TPMs.
+openssl-provider-vault is complementary: it targets deployments where a cloud-native
+secret-management system is preferred over a hardware device, and where
+Vault's policy engine and audit capabilities provide value beyond raw
+key isolation.
+
+\textbf{Post-quantum providers.}
+The Open Quantum Safe project's \texttt{oqs-provider}~\cite{oqs-provider}
+demonstrates the same OpenSSL~3 provider dispatch pattern in a different
+domain: it registers quantum-safe KEM and signature algorithms so that
+TLS~1.3, X.509, and S/MIME consumers can use them transparently.  While
+its focus is algorithmic diversity rather than key isolation, it is a
+notable example of the provider model's generality and of the ecosystem
+of third-party providers that have emerged since OpenSSL~3.0.
+
+\textbf{Engine-based approaches.}  OpenSSL's deprecated engine interface was
+used by numerous projects (e.g., \texttt{engine\_pkcs11},
+\texttt{aws-lc}) to redirect private-key operations.  The provider model is
+the supported successor and avoids the thread-safety and context-propagation
+problems inherent in the global engine registry.
+
+\textbf{Vault PKI / TLS integration.}  HashiCorp provides several
+Vault-adjacent tools for TLS (Vault Agent, Envoy SDS, cert-manager) but
+these operate at the certificate issuance layer, not at the signing primitive
+layer.  They do not prevent key material from residing in the application
+process after issuance.  openssl-provider-vault addresses the residual risk of
+an already-issued key being exposed at runtime.
+
+% ── 8. Future Work ───────────────────────────────────────────────────────────
+\section{Future Work}
+\label{sec:future}
+
+\textbf{Performance characterization.}  A systematic latency and throughput
+study across key types, Vault deployment topologies (local, Vault Cloud, HA
+cluster), and TLS session reuse strategies is needed to quantify the
+performance overhead of the remote-dispatch model.
+
+\textbf{mTLS and certificate-based Vault authentication.}  Replacing token
+authentication with a client-certificate-based Vault auth method would
+eliminate the token-storage risk identified in \S\ref{sec:security}.
+
+\textbf{Key derivation context.}  Vault's \texttt{derived: true} key flag
+enables per-context key derivation.  Exposing this through a custom
+\texttt{OSSL\_PARAM} would support authenticated encryption schemes where
+each session derives a unique key from a shared root.
+
+\textbf{Asynchronous signing.}  Long-lived TLS servers that sign thousands
+of handshakes per second must serialize all signing operations through the
+Vault HTTP endpoint.  Exposing an asynchronous signing interface and
+pipelining requests over a persistent connection pool would substantially
+reduce latency under load.
+
+\textbf{Digest provider.}  While hashing inside Vault adds an unnecessary
+network round-trip for most use cases, the \texttt{transit/hash} endpoint
+could be exposed as an optional provider-backed DIGEST operation for
+regulated environments that require all cryptographic operations to be
+recorded in the Vault audit log.
+
+\textbf{PKCS\#11 compatibility layer.}  An open-source Vault-backed
+PKCS\#11 module would be a natural complement to the provider design for
+software ecosystems that expect HSM-style interfaces, particularly for
+deployments that wish to avoid proprietary middleware in their cryptographic
+stack.  Such a module could expose Vault-managed keys through the de facto
+standard token API used by existing HSM integrations, while reusing much of
+the same remote-operation model described in this work.
+
+% ── 9. Conclusion ────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented openssl-provider-vault, an OpenSSL~3 provider that delegates
+private-key operations to HashiCorp Vault's transit secrets engine.  By
+implementing the standard OpenSSL provider dispatch interface, the system
+achieves drop-in transparency: any application or library built on the
+OpenSSL EVP API---from \texttt{openssl(1)} to production TLS servers---gains
+the isolation and auditability of Vault-managed keys without modification.
+The provider handles the prehashing impedance mismatch between OpenSSL's
+streaming interface and Vault's prehash-oriented REST API, correctly manages
+context duplication mid-stream, and generates standard ASN.1 algorithm
+identifiers required by certificate-issuance code paths.
+
+The design ensures that private key material is never present in application
+process memory; compromise of the application, its heap, or its TLS library
+cannot yield the key.  We have described the residual risks---chiefly Vault
+availability, token storage, and transport security---and outlined mitigations
+for each.
+
+openssl-provider-vault is open-source and available at
+\url{https://github.com/sorenisanerd/openssl-provider-vault}.
+
+% ── References ───────────────────────────────────────────────────────────────
+\bibliographystyle{ACM-Reference-Format}
+\begin{thebibliography}{9}
+
+\bibitem{vault-transit}
+HashiCorp.
+\newblock Vault Transit Secrets Engine Documentation.
+\newblock \url{https://developer.hashicorp.com/vault/docs/secrets/transit},
+  2024.
+
+\bibitem{openssl3-providers}
+OpenSSL Project.
+\newblock Providers, OpenSSL 3.x Manual.
+\newblock \url{https://www.openssl.org/docs/man3.0/man7/provider.html}, 2024.
+
+\bibitem{pkcs11-provider}
+Simo Sorce et al.
+\newblock pkcs11-provider: A PKCS\#11 Provider for OpenSSL~3.
+\newblock \url{https://github.com/openssl-projects/pkcs11-provider}, 2023.
+
+\bibitem{cmocka}
+Andreas Schneider and Google Inc.
+\newblock cmocka: Unit testing framework for C.
+\newblock \url{https://cmocka.org}, 2013.
+
+\bibitem{oqs-provider}
+Open Quantum Safe Project.
+\newblock oqs-provider: An OpenSSL 3 Provider for Quantum-Safe Cryptography.
+\newblock \url{https://github.com/open-quantum-safe/oqs-provider}, 2025.
+
+\bibitem{go-constant-time-bignum}
+Lucas Meier.
+\newblock Constant-Time Big Numbers (for Go).
+\newblock EPFL Technical Report, 2021.
+\newblock \url{https://www.epfl.ch/labs/dedis/wp-content/uploads/2021/07/report-2021-1-LucasMeier_ConstantTime.pdf}
+
+\bibitem{vault-ha}
+HashiCorp.
+\newblock Vault High Availability Documentation.
+\newblock \url{https://developer.hashicorp.com/vault/docs/concepts/ha}, 2024.
+
+\end{thebibliography}
+
+\end{document}
