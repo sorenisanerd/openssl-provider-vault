@@ -305,3 +305,8 @@ If you use or reference this work in an academic context, please cite it as:
   url          = {https://github.com/sorenisanerd/openssl-provider-vault}
 }
 ```
+
+The paper is licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the
+source code in this repository is licensed under Apache 2.0. See
+[LICENSE-PAPER](LICENSE-PAPER) and [LICENSE](LICENSE) respectively.

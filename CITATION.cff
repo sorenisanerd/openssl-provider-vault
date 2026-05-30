@@ -14,6 +14,7 @@ authors:
     email: "sorenisanerd@gmail.com"
     orcid: "https://orcid.org/0009-0002-4740-8647"
 
+license: "Apache-2.0"
 keywords:
   - "OpenSSL"
   - "HashiCorp Vault"
@@ -33,4 +34,5 @@ preferred-citation:
       orcid: "https://orcid.org/0009-0002-4740-8647"
   year: 2026
   month: 5
+  license: "CC-BY-4.0"
   url: "https://github.com/sorenisanerd/openssl-provider-vault/raw/main/vault_provider.pdf"
